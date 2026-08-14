@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Base Info.plist. GENERATE_INFOPLIST_FILE is still YES, so Xcode merges the
+	  INFOPLIST_KEY_* build settings (LSUIElement, NSCameraUsageDescription, …)
+	  on top of this. Only keys Xcode has no build-setting alias for belong here.
+
+	  Required to use AVCaptureDevice.DeviceType.continuityCamera — without it
+	  AVFoundation logs a warning and refuses to vend iPhone cameras.
+	-->
+	<key>NSCameraUseContinuityCameraDeviceType</key>
+	<true/>
+</dict>
+</plist>
