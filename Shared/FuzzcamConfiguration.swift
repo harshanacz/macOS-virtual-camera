@@ -13,8 +13,9 @@ public struct FuzzcamConfiguration: Codable, Equatable, Sendable {
 
     public var preset: QualityPreset
 
-    /// 0 = softest, 0.5 = camera's own sharpness, 1 = sharpened.
-    /// The default sits below the midpoint because cheap webcams are not sharp.
+    /// 0 = softer than the preset intends, 0.5 = exactly as intended,
+    /// 1 = sharpened. The preset carries its own detail loss, so the neutral
+    /// midpoint is the right default — the degradation does not depend on this.
     public var sharpness: Double
 
     /// 0 = no compression simulation, 1 = heavy blocking.
@@ -47,7 +48,7 @@ public struct FuzzcamConfiguration: Codable, Equatable, Sendable {
         selectedCameraUniqueID: nil,
         automaticallyReconnect: true,
         preset: .low,
-        sharpness: 0.30,
+        sharpness: 0.50,
         compression: 0.0,
         noise: 0.0,
         blurEnabled: false,

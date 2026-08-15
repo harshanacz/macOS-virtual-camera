@@ -239,10 +239,7 @@ final class AppModel {
     }
 
     func selectPreset(_ preset: QualityPreset) {
-        var updated = configuration
-        updated.preset = preset
-        updated.sharpness = preset.suggestedSharpness
-        configuration = updated
+        configuration.preset = preset
     }
 
     func retry() {

@@ -18,6 +18,12 @@ enum FrameDumper {
     private static let log = Logger(subsystem: "com.harshanacz.Fuzzcam", category: "FrameDumper")
     private static let lock = NSLock()
     private static var hasRun = false
+    private static var framesSeen = 0
+
+    /// Frames to discard before dumping. A camera's first frames are black or
+    /// badly exposed while auto-exposure and auto-white-balance converge, and
+    /// measuring detail on an unexposed frame is meaningless.
+    private static let warmUpFrames = 60
 
     static var isEnabled: Bool { directory != nil }
 
@@ -38,6 +44,8 @@ enum FrameDumper {
 
         let shouldRun: Bool = lock.withLock {
             guard !hasRun else { return false }
+            framesSeen += 1
+            guard framesSeen >= warmUpFrames else { return false }
             hasRun = true
             return true
         }
@@ -48,9 +56,28 @@ enum FrameDumper {
         let context = CIContext(options: [.cacheIntermediates: false])
         guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) else { return }
 
+        let sourceImage = CIImage(cvPixelBuffer: frame.pixelBuffer)
         write(
-            CIImage(cvPixelBuffer: frame.pixelBuffer),
+            sourceImage,
             to: directory.appendingPathComponent("original.png"),
+            context: context,
+            colorSpace: colorSpace
+        )
+
+        // The source scaled to the output size, then cropped identically to the
+        // presets — so "original" and "very low" can be compared pixel for pixel.
+        let sourceExtent = sourceImage.extent
+        let fit = CGFloat(VirtualCameraFormat.height) / sourceExtent.height
+        let fitted = sourceImage.transformed(by: CGAffineTransform(scaleX: fit, y: fit))
+        let sourceCrop = CGRect(
+            x: fitted.extent.midX - 280, y: fitted.extent.midY - 200,
+            width: 560, height: 400
+        )
+        write(
+            fitted.cropped(to: sourceCrop).transformed(
+                by: CGAffineTransform(translationX: -sourceCrop.minX, y: -sourceCrop.minY)
+            ),
+            to: directory.appendingPathComponent("crop-source.png"),
             context: context,
             colorSpace: colorSpace
         )
@@ -59,7 +86,9 @@ enum FrameDumper {
             let processor = FrameProcessor()
             var settings = FrameProcessor.Settings()
             settings.preset = preset
-            settings.sharpness = preset.suggestedSharpness
+            // Neutral sharpness: judge the preset's own intrinsic degradation,
+            // not the slider on top of it.
+            settings.sharpness = 0.5
             processor.settings = settings
 
             guard let processed = processor.process(frame) else {
@@ -67,12 +96,29 @@ enum FrameDumper {
                 continue
             }
 
+            let output = CIImage(cvPixelBuffer: processed.pixelBuffer)
             write(
-                CIImage(cvPixelBuffer: processed.pixelBuffer),
+                output,
                 to: directory.appendingPathComponent("preset-\(preset.rawValue).png"),
                 context: context,
                 colorSpace: colorSpace
             )
+
+            // Centre crop at 1:1 so fine detail can actually be judged.
+            let crop = CGRect(
+                x: (CGFloat(VirtualCameraFormat.width) - 560) / 2,
+                y: (CGFloat(VirtualCameraFormat.height) - 400) / 2,
+                width: 560, height: 400
+            )
+            write(
+                output.cropped(to: crop).transformed(
+                    by: CGAffineTransform(translationX: -crop.minX, y: -crop.minY)
+                ),
+                to: directory.appendingPathComponent("crop-\(preset.rawValue).png"),
+                context: context,
+                colorSpace: colorSpace
+            )
+
             let size = processor.lastProcessingSize
             log.info("dump: \(preset.rawValue, privacy: .public) processed at \(Int(size.width))×\(Int(size.height))")
         }

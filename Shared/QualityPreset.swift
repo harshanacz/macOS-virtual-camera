@@ -1,13 +1,18 @@
 import CoreGraphics
 import Foundation
 
-/// How aggressively the camera image is degraded.
+/// How much like a cheap webcam the output should look.
 ///
-/// The preset selects the *intermediate* resolution the frame is resampled down
-/// to. That resampling is what actually destroys fine detail — the frame is then
-/// scaled back up to the virtual camera's fixed output size, carrying the lost
-/// detail with it. The advertised output format never changes, because
-/// conferencing apps expect a stable, standard camera format.
+/// A preset is not just a resolution. Each one carries its own *intrinsic*
+/// degradation — smeared micro-texture, soft chroma, crunchy edges, washed
+/// shadows — that is applied regardless of where the user has left the manual
+/// sliders. That matters: dropping resolution alone produces a clean, small
+/// image, which reads as "downscaled", not as "bad webcam". The artefacts are
+/// what sell it.
+///
+/// The manual sharpness control still works on top, but it cannot restore what
+/// the preset threw away: Very Low resamples through 320×180, and no amount of
+/// sharpening puts 1080p detail back.
 public enum QualityPreset: String, Codable, CaseIterable, Sendable {
     case veryLow
     case low
@@ -25,12 +30,23 @@ public enum QualityPreset: String, Codable, CaseIterable, Sendable {
         }
     }
 
-    /// Nominal 16:9 intermediate resolution. Actual dimensions are derived from
-    /// the source aspect ratio by ``intermediateSize(forSource:)``.
+    /// One-line description of the intent, shown in the UI.
+    public var summary: String {
+        switch self {
+        case .original: return "Full camera quality"
+        case .high:     return "Slightly reduced detail"
+        case .medium:   return "Typical webcam quality"
+        case .low:      return "Low-quality webcam"
+        case .veryLow:  return "Very low-quality webcam"
+        }
+    }
+
+    /// Nominal 16:9 intermediate resolution. The real dimensions come from
+    /// ``intermediateSize(forSource:)``, which follows the source's aspect ratio.
     public var nominalSize: CGSize? {
         switch self {
-        case .veryLow:  return CGSize(width: 480, height: 270)
-        case .low:      return CGSize(width: 640, height: 360)
+        case .veryLow:  return CGSize(width: 320, height: 180)
+        case .low:      return CGSize(width: 480, height: 270)
         case .medium:   return CGSize(width: 854, height: 480)
         case .high:     return CGSize(width: 1280, height: 720)
         case .original: return nil
@@ -44,13 +60,13 @@ public enum QualityPreset: String, Codable, CaseIterable, Sendable {
 
     /// The resolution a frame of `source` dimensions is resampled down to.
     ///
-    /// Matched on **height** and rounded to even numbers, so a 4:3 camera
-    /// produces 480×360 for the "Low" preset rather than a stretched 640×360.
-    /// Aspect ratio is always preserved; the image is never distorted.
+    /// Matched on **height** and rounded to even numbers, so a 4:3 camera gives
+    /// 360×270 for Low rather than a stretched 480×270. Aspect ratio is always
+    /// preserved; the image is never distorted.
     ///
-    /// Returns `nil` when the preset asks for no downscale, or when the source
-    /// is already at or below the target — upsampling first would add no detail
-    /// and cost a filter pass.
+    /// `nil` means no downscale — either the preset asks for none, or the source
+    /// is already at or below the target, in which case upsampling first would
+    /// add no detail and cost a pass.
     public func intermediateSize(forSource source: CGSize) -> CGSize? {
         guard let nominal = nominalSize else { return nil }
         guard source.width > 0, source.height > 0 else { return nil }
@@ -58,20 +74,77 @@ public enum QualityPreset: String, Codable, CaseIterable, Sendable {
 
         let scale = nominal.height / source.height
         let width = (source.width * scale).rounded()
-        let height = nominal.height
 
-        return CGSize(width: max(2, width.roundedDownToEven), height: max(2, height.roundedDownToEven))
+        return CGSize(
+            width: max(2, width.roundedDownToEven),
+            height: max(2, nominal.height.roundedDownToEven)
+        )
     }
 
-    /// Starting point for the sharpness control when the user picks a preset.
-    /// Still individually overridable in Settings.
-    public var suggestedSharpness: Double {
+    // MARK: - Intrinsic degradation
+    //
+    // Applied whatever the sliders say. Values were tuned by rendering real
+    // camera frames at each preset and comparing them side by side, not by
+    // picking round numbers.
+
+    /// Smearing of fine texture while edges survive — the signature of a cheap
+    /// sensor with aggressive noise reduction. This is what turns skin waxy and
+    /// hair into a mass, and it is the single most convincing cue.
+    public var detailSmear: Double {
         switch self {
-        case .veryLow:  return 0.20
+        case .original: return 0.00
+        case .high:     return 0.18
+        case .medium:   return 0.38
+        case .low:      return 0.62
+        case .veryLow:  return 0.82
+        }
+    }
+
+    /// How much colour resolution is thrown away relative to luma, imitating
+    /// heavy chroma subsampling and a weak demosaic.
+    public var chromaSoftness: Double {
+        switch self {
+        case .original: return 0.00
+        case .high:     return 0.20
+        case .medium:   return 0.40
+        case .low:      return 0.65
+        case .veryLow:  return 0.85
+        }
+    }
+
+    /// Edge halos. Cheap webcams over-sharpen to compensate for a soft lens, so
+    /// a little crunch after the smearing reads as "cheap" rather than "blurred".
+    public var edgeCrunch: Double {
+        switch self {
+        case .original: return 0.00
+        case .high:     return 0.15
+        case .medium:   return 0.32
+        case .low:      return 0.48
+        case .veryLow:  return 0.58
+        }
+    }
+
+    /// Washed-out shadows and slightly flat, desaturated colour — small sensors
+    /// with no dynamic range to spare.
+    public var tonalFlatness: Double {
+        switch self {
+        case .original: return 0.00
+        case .high:     return 0.08
+        case .medium:   return 0.18
         case .low:      return 0.30
-        case .medium:   return 0.35
-        case .high:     return 0.45
-        case .original: return 0.50
+        case .veryLow:  return 0.42
+        }
+    }
+
+    /// Baseline compression damage. The user's compression slider adds to this;
+    /// it can never take the preset below its own floor.
+    public var intrinsicCompression: Double {
+        switch self {
+        case .original: return 0.00
+        case .high:     return 0.06
+        case .medium:   return 0.16
+        case .low:      return 0.30
+        case .veryLow:  return 0.44
         }
     }
 }

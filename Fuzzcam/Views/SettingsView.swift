@@ -57,10 +57,17 @@ struct SettingsView: View {
 
     private var qualityTab: some View {
         Form {
-            Picker("Preset", selection: presetSelection) {
+            Picker("Webcam Quality", selection: presetSelection) {
                 ForEach(QualityPreset.allCases, id: \.self) { preset in
-                    Text("\(preset.displayName) — \(preset.subtitle)").tag(preset)
+                    Text("\(preset.displayName) — \(preset.summary)").tag(preset)
                 }
+            }
+            .help(model.configuration.preset.summary)
+
+            LabeledContent("") {
+                Text(model.configuration.preset.summary)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
 
             LabeledContent("Processing") {

@@ -42,36 +42,40 @@ built-in camera reporting 1920×1080.
 
 ## 3. Processing
 
-Measured from one live camera frame, every image compared at the virtual
-camera's 1280×720 output size so only *detail* differs. Laplacian variance is
-the standard sharpness proxy; HF% is the share of FFT energy above a quarter of
-Nyquist.
+Live 1920×1080 frame, 1:1 centre crops compared at the 1280×720 output. Judged
+visually first; metrics support the judgement rather than replace it.
 
-| # | Preset | Processing size | Detail vs source | HF% | Result |
+| # | Preset | Intermediate | SSIM vs src | Flat texture | Result |
 |---|---|---|---|---|---|
-| 3.1 | source | 1920×1080 | 100.0% | 71.6% | — |
-| 3.2 | Original | 1920×1080 | 102.7% | 72.8% | **PASS** (no degradation) |
-| 3.3 | High | 1280×720 | 101.9% | 72.5% | **PASS** |
-| 3.4 | Medium | 854×480 | 55.8% | 66.4% | **PASS** |
-| 3.5 | Low | 640×360 | 30.6% | 60.7% | **PASS** |
-| 3.6 | Very Low | 480×270 | 15.0% | 55.0% | **PASS** |
+| 3.1 | Original | 1920×1080 (native) | 1.000 | 100% | **PASS** no degradation |
+| 3.2 | High | 1280×720 | 0.960 | 87% | **PASS** slightly reduced |
+| 3.3 | Medium | 854×480 | 0.933 | 77% | **PASS** typical webcam |
+| 3.4 | Low | 480×270 | 0.878 | 74% | **PASS** cheap webcam |
+| 3.5 | Very Low | 320×180 | 0.810 | 75% | **PASS** very low quality |
 
-Monotonic in both metrics. Reproduce with `FUZZCAM_DUMP=1` (see
-[DEVELOPMENT.md](DEVELOPMENT.md)).
+Visual A/B on a frame containing a fan grille, drone struts, chair mesh, wood
+grain and small lettering:
 
-| # | Control | Result | Effect at Low preset |
-|---|---|---|---|
-| 3.7 | Sharpness 100% | **PASS** | detail 30.6% → 65.5% |
-| 3.8 | Sharpness 0% | **PASS** | detail 30.6% → 12.5% |
-| 3.9 | Sharpness 30% (default) is not a visible blur | **PASS** | sub-pixel radius at intermediate resolution |
-| 3.10 | Compression 85% | **PASS** | detail → 5.6%, 8×8 blocking + banding |
-| 3.11 | Compression 0% (default) costs nothing | **PASS** | filter skipped entirely |
-| 3.12 | Noise 80% | **PASS** | HF energy rises as expected for grain |
-| 3.13 | Noise 0% (default) costs nothing | **PASS** | filter skipped entirely |
-| 3.14 | Blur is off by default | **PASS** | `blurEnabled = false` |
-| 3.15 | Aspect ratio preserved, never stretched | **PASS** | `intermediateSize(forSource:)` matches on height; `fitToOutput` letterboxes |
-| 3.16 | Output is always 1280×720 | **PASS** | all dumps 1280×720 |
-| 3.17 | Preset change takes effect without restarting capture | **PASS** | settings read per frame under lock |
+| # | Check | Result |
+|---|---|---|
+| 3.6 | Very Low unmistakably worse than source | **PASS** — "INNOVEX" lettering gone, grille wires dissolved, mesh and grain gone |
+| 3.7 | Low resembles a cheap webcam | **PASS** — grille soft and merging, lettering a smudge, texture smoothed |
+| 3.8 | High only slightly reduced | **PASS** — barely softer, lettering still legible |
+| 3.9 | Still natural, plausible as a camera feed | **PASS** at every preset |
+| 3.10 | Not an obvious Gaussian blur | **PASS** — edges stay crisp; smear is edge-preserving |
+| 3.11 | Not pixelated at non-extreme presets | **PASS** |
+| 3.12 | Aspect ratio preserved, never stretched | **PASS** — matched on height |
+| 3.13 | Output always 1280×720 | **PASS** |
+| 3.14 | Preset change applies without restarting capture | **PASS** — settings read per frame under lock |
+| 3.15 | Sharpness slider still works | **PASS** — biases ±, cannot restore discarded detail |
+| 3.16 | Very Low cannot be sharpened back to source | **PASS** — 320×180 resample is irreversible |
+| 3.17 | Compression slider has visible effect | **PASS** — adds on top of the preset floor |
+| 3.18 | Noise/blur off by default | **PASS** |
+| 3.19 | Virtual cameras excluded as capture sources | **PASS** — prevents a feedback loop on Fuzzcam's own output |
+
+Global Laplacian variance is **not** a valid metric for this pipeline: the
+intentional edge halos are high-frequency energy and score Very Low *above* the
+source. Use SSIM, flat-region texture, and your eyes.
 
 ## 4. Performance
 
@@ -79,11 +83,11 @@ Monotonic in both metrics. Reproduce with `FUZZCAM_DUMP=1` (see
 
 | # | Metric | Target | Measured | Result |
 |---|---|---|---|---|
-| 4.1 | Frame rate | ≥30 fps | 29.6–30.1 fps | **PASS** |
-| 4.2 | Processing latency | low | 4.28–4.87 ms | **PASS** |
-| 4.3 | Dropped frames | no accumulation | 3 total, all at startup, flat after | **PASS** |
-| 4.4 | Memory growth | none | 134.2 → 134.4 MB over 60 s | **PASS** |
-| 4.5 | CPU | modest | ~23% of one core | **PASS** |
+| 4.1 | Frame rate | ≥30 fps | 29.9–30.0 fps | **PASS** |
+| 4.2 | Processing latency | low | 6.49–6.71 ms (Very Low, heaviest chain) | **PASS** |
+| 4.3 | Dropped frames | no accumulation | 4 in 4172, all at startup | **PASS** |
+| 4.4 | Memory growth | none | 127.3 → 128.0 MB over 60 s | **PASS** |
+| 4.5 | CPU | modest | ~33% of one core (Debug) | **PASS** |
 | 4.6 | Main thread not in the frame path | required | preview ≤20 fps, counters polled at 2 Hz | **PASS** |
 | 4.7 | Bounded queues everywhere | required | busy-flag drop in pipeline; depth-3 cap on sink | **PASS** |
 

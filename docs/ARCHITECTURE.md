@@ -235,34 +235,83 @@ exists in the HAL and our sink stream is started*, which is the only claim worth
 
 ---
 
-## 6. Processing pipeline (Phase 2 detail, recorded here for completeness)
+## 6. Processing pipeline
+
+Simply downscaling produces a clean small picture, which reads as "downscaled",
+not "bad camera". What makes cheap webcams look cheap is a specific set of
+failures, reproduced in the order a real camera commits them. Everything from
+step 2 to step 7 runs at the *intermediate* resolution, which is what keeps it
+affordable.
 
 ```
-input CVPixelBuffer (e.g. 1920×1080)
+input CVPixelBuffer (1920×1080)
    │
-   ├─ 1. Downscale to preset target (e.g. 640×360)   ← Lanczos, this is where detail dies
+   ├─ 1. Resample to the preset size (Lanczos)   ← irreversible; the real work
+   ├─ 2. Smear micro-texture, edges intact       ← CINoiseReduction pushed past
+   │                                                sane denoising. Waxy skin.
+   ├─ 3. Soften chroma only, luma stays sharp    ← CILuminosityBlendMode over a
+   │                                                blurred copy = 4:2:0 look
+   ├─ 4. Flatten tone: lift blacks, cut contrast/saturation
+   ├─ 5. Over-sharpen                            ← CIUnsharpMask halos. Cheap
+   │                                                cameras do this; without it
+   │                                                the result reads "blurred"
+   ├─ 6. Grain (optional, off by default)
+   ├─ 7. Compression: 8×8 blocks + banding, blended
    │
-   ├─ 2. Sharpness reduction  (0–100%, default 30%)  ← CIUnsharpMask with negative-ish
-   │                                                    intensity / mild lowpass, NOT blur
-   ├─ 3. Compression simulation (0–100%, default 0)  ← 8×8 block quantisation feel via
-   │                                                    downsample-to-blocks + posterise
-   ├─ 4. Noise (off/low/med/high, default off)       ← CIRandomGenerator, additive
-   │
-   └─ 5. Upscale to 1280×720                         ← nearest/linear; does NOT restore detail
-         │
-         ▼
-   output CVPixelBuffer from a reused CVPixelBufferPool
+   └─ 8. Upscale to 1280×720, letterboxed, never stretched
 ```
 
-Step 1 is the load-bearing step: resampling to 640×360 physically discards
-high-frequency information, so the 720p output is genuinely a cheap-webcam image, not a
-blurred one. Gaussian blur is **not** in the default path.
+Step 5 is the counter-intuitive one and it is what sells the effect: after
+smearing, adding crunchy edge halos makes the image read as a *bad camera*
+rather than a *blur filter*.
 
-All steps run in a single Core Image filter chain on one `CIContext` backed by the
-default `MTLDevice`, rendered once into a pooled output buffer — one GPU pass, no
-intermediate CPU copies.
+Gaussian blur is not in the default path at any preset. It exists only if the
+user explicitly enables it.
 
----
+### Preset parameters
+
+Degradation is **intrinsic to the preset**, applied whatever the sliders say. The
+sharpness control biases the result but cannot restore what the resample threw
+away.
+
+| Preset | Intermediate | Smear | Chroma | Crunch | Tone | Compression floor |
+|---|---|---|---|---|---|---|
+| Original | source | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| High | 1280×720 | 0.18 | 0.20 | 0.15 | 0.08 | 0.06 |
+| Medium | 854×480 | 0.38 | 0.40 | 0.32 | 0.18 | 0.16 |
+| Low | 480×270 | 0.62 | 0.65 | 0.48 | 0.30 | 0.30 |
+| Very Low | 320×180 | 0.82 | 0.85 | 0.58 | 0.42 | 0.44 |
+
+Sizes are matched on **height** against the source aspect ratio, so a 4:3 camera
+gets 360×270 for Low rather than a stretched 480×270.
+
+### Measured result
+
+One live 1920×1080 frame, 1:1 centre crops compared at the 1280×720 output size.
+
+| Preset | SSIM vs source | Skin/flat micro-texture |
+|---|---|---|
+| High | 0.960 | 87% |
+| Medium | 0.933 | 77% |
+| Low | 0.878 | 74% |
+| Very Low | **0.810** | **75%** |
+
+A global Laplacian-variance metric is **not** valid here: the deliberate edge
+halos are high-frequency energy, so it scores Very Low *above* the source. SSIM
+and flat-region texture are not fooled, and visual A/B is the deciding test —
+at Very Low the lettering on a fan hub 2 m away is gone and the grille wires
+have dissolved, while the image still looks like a plausible camera feed.
+
+**One processor, three consumers.** `VideoPipeline` owns the only production
+`FrameProcessor`; the identical `VideoFrame` goes to the Processed preview, the
+virtual-camera sink, and (debug only) the development output window. There is no
+second degradation implementation anywhere.
+
+### Cost
+
+30.0 fps, 6.5–6.7 ms per frame, ~128 MB steady, ~33% of one core, in a Debug
+build at the heaviest preset. The richer chain cost ~2.5 ms over the original
+downscale-only pipeline, against a 33 ms budget.
 
 ## 7. Status
 

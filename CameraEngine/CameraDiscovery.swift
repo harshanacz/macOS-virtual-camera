@@ -1,6 +1,7 @@
 import AVFoundation
 import Combine
 import Foundation
+import IOKit.audio
 
 /// A physical camera, reduced to what the UI needs.
 struct CameraDevice: Identifiable, Hashable, Sendable {
@@ -62,7 +63,7 @@ final class CameraDiscovery {
             mediaType: .video,
             position: .unspecified
         )
-        let found = session.devices.map(CameraDevice.init)
+        let found = session.devices.filter { !$0.isVirtualCamera }.map(CameraDevice.init)
         guard found != cameras else { return }
         cameras = found
         onChange?(found)
@@ -72,14 +73,14 @@ final class CameraDiscovery {
     /// default so a camera that was unplugged since last launch does not leave
     /// the app with nothing to capture.
     func resolve(uniqueID: String?) -> AVCaptureDevice? {
-        if let uniqueID, let device = AVCaptureDevice(uniqueID: uniqueID) {
+        if let uniqueID, let device = AVCaptureDevice(uniqueID: uniqueID), !device.isVirtualCamera {
             return device
         }
         return AVCaptureDiscoverySession(
             deviceTypes: Self.deviceTypes,
             mediaType: .video,
             position: .unspecified
-        ).devices.first
+        ).devices.first { !$0.isVirtualCamera }
     }
 }
 
@@ -90,5 +91,24 @@ private final class ObserverTokens: @unchecked Sendable {
     var tokens: [NSObjectProtocol] = []
     deinit {
         for token in tokens { NotificationCenter.default.removeObserver(token) }
+    }
+}
+
+
+extension AVCaptureDevice {
+    /// True for software cameras such as Fuzzcam's own output, OBS, or any other
+    /// Core Media I/O extension.
+    ///
+    /// These must never be offered as a capture source. Selecting Fuzzcam's own
+    /// virtual camera would feed the processed output straight back into the
+    /// processor — an unbounded feedback loop that degrades a little more on
+    /// every pass until the picture is gone. Capturing another app's virtual
+    /// camera is merely wrong rather than catastrophic, but it is never what
+    /// anyone means by "use my webcam".
+    ///
+    /// CMIO extensions report a virtual transport type; Fuzzcam's own extension
+    /// sets exactly this value in `deviceProperties(forProperties:)`.
+    var isVirtualCamera: Bool {
+        transportType == Int32(bitPattern: UInt32(kIOAudioDeviceTransportTypeVirtual))
     }
 }

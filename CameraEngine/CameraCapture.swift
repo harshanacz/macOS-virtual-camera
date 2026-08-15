@@ -204,15 +204,19 @@ final class CameraCapture: NSObject, @unchecked Sendable {
         log.info("capture running: \(device.localizedName, privacy: .public) \(dims.width)×\(dims.height)")
     }
 
+    /// Never resolves to a virtual camera. Capturing Fuzzcam's own output would
+    /// be an unbounded feedback loop; see `AVCaptureDevice.isVirtualCamera`.
     private func resolveDevice() -> AVCaptureDevice? {
-        if let requestedUniqueID, let device = AVCaptureDevice(uniqueID: requestedUniqueID) {
+        if let requestedUniqueID,
+           let device = AVCaptureDevice(uniqueID: requestedUniqueID),
+           !device.isVirtualCamera {
             return device
         }
         return AVCaptureDevice.DiscoverySession(
             deviceTypes: [.builtInWideAngleCamera, .external, .continuityCamera, .deskViewCamera],
             mediaType: .video,
             position: .unspecified
-        ).devices.first
+        ).devices.first { !$0.isVirtualCamera }
     }
 
     /// Picks a capture format big enough to be worth degrading but no bigger.

@@ -38,12 +38,13 @@ struct MenuBarContentView: View {
             }
         }
 
-        Menu("Quality") {
+        Menu("Webcam Quality") {
             ForEach(QualityPreset.allCases, id: \.self) { preset in
                 Button {
                     model.selectPreset(preset)
                 } label: {
-                    checked(preset.displayName, isOn: preset == model.configuration.preset)
+                    checked("\(preset.displayName) — \(preset.summary)",
+                            isOn: preset == model.configuration.preset)
                 }
             }
         }
